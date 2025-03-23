@@ -90,6 +90,16 @@ io.on("connection", (socket) => {
     }
   });
 
+  socket.on("restartGame", (gameId) => {
+    const game = games[gameId];
+
+    if (game) {
+      game.board = Array(9).fill(null); // Reset board
+      game.turn = "X"; // X always starts
+      io.to(gameId).emit("gameRestarted", game);
+    }
+  });
+
   // Chat functionality to handle messages
   socket.on("chatMessage", ({ gameId, message, sender }) => {
     io.to(gameId).emit("receiveMessage", { message, sender });
