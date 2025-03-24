@@ -90,12 +90,13 @@ io.on("connection", (socket) => {
     }
   });
 
+  // Restart the game after the match
   socket.on("restartGame", (gameId) => {
     const game = games[gameId];
 
     if (game) {
-      game.board = Array(9).fill(null); // Reset board
-      game.turn = "X"; // X always starts
+      game.board = Array(9).fill(null);
+      game.turn = "X";
       io.to(gameId).emit("gameRestarted", game);
     }
   });
@@ -118,4 +119,4 @@ io.on("connection", (socket) => {
   });
 });
 
-server.listen(3001, () => console.log("Server running on port 3001"));
+server.listen(3002, () => console.log("Server running on port 3002"));
