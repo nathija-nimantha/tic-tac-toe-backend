@@ -169,28 +169,46 @@ io.on("connection", (socket) => {
   socket.on("makeMove", ({ gameId, index }) => {
     const game = games[gameId];
 
-    if (game && game.board[index] === null) {
-      const currentPlayerIndex = game.players.indexOf(socket.id);
+    if (!game || game.board[index] !== null) {
+      return; // No valid game or cell already taken
+    }
 
-      // Determine which player should be moving based on the current turn and host settings
-      const isPlayerXTurn = game.turn === "X";
-      const isPlayerXMoving = (game.hostStarts && currentPlayerIndex === 0) || (!game.hostStarts && currentPlayerIndex === 1);
+    const currentPlayerIndex = game.players.indexOf(socket.id);
+    if (currentPlayerIndex === -1) {
+      console.log(`Player ${socket.id} not found in game ${gameId}`);
+      return; // Player not in this game
+    }
 
-      // Check if the correct player is making the move
-      if ((isPlayerXTurn && isPlayerXMoving) || (!isPlayerXTurn && !isPlayerXMoving)) {
-        game.board[index] = game.turn;
-        const result = checkWinner(game.board, game.winningCombinations);
+    // Log the current state to help debug
+    console.log(`Turn: ${game.turn}, Player: ${currentPlayerIndex}, HostStarts: ${game.hostStarts}`);
 
-        if (result) {
-          io.to(gameId).emit("updateBoard", game);
-          setTimeout(() => {
-            io.to(gameId).emit("gameOver", result);
-          }, 300);
-        } else {
-          game.turn = game.turn === "X" ? "O" : "X";
-          io.to(gameId).emit("updateBoard", game);
-        }
+    // Determine which player should be X based on hostStarts
+    const playerX = game.hostStarts ? game.players[0] : game.players[1];
+    const playerO = game.hostStarts ? game.players[1] : game.players[0];
+
+    // Check if it's this player's turn
+    const isValidMove = (game.turn === "X" && socket.id === playerX) ||
+        (game.turn === "O" && socket.id === playerO);
+
+    if (isValidMove) {
+      console.log(`Valid move by ${socket.id} (${game.turn}) at position ${index}`);
+
+      // Make the move
+      game.board[index] = game.turn;
+      const result = checkWinner(game.board, game.winningCombinations);
+
+      if (result) {
+        io.to(gameId).emit("updateBoard", game);
+        setTimeout(() => {
+          io.to(gameId).emit("gameOver", result);
+        }, 300);
+      } else {
+        // Switch turn
+        game.turn = game.turn === "X" ? "O" : "X";
+        io.to(gameId).emit("updateBoard", game);
       }
+    } else {
+      console.log(`Invalid move attempt by ${socket.id}. Current turn is ${game.turn}`);
     }
   });
 
@@ -252,11 +270,6 @@ io.on("connection", (socket) => {
       const dimension = gameSize === "3x3" ? 3 : gameSize === "6x6" ? 6 : 9;
       const boardSize = dimension * dimension;
 
-      // Update game settings
-      game.gameSize = gameSize;
-      game.boardDimension = dimension;
-      game.hostStarts = hostStarts;
-
       // Broadcast game settings change to all players
       io.to(gameId).emit("gameSettingsChanged", {
         gameSize,
@@ -270,7 +283,12 @@ io.on("connection", (socket) => {
         // Reset the board and update winning combinations
         game.board = Array(boardSize).fill(null);
         game.winningCombinations = generateWinningCombinations(boardSize);
-        game.turn = "X";
+        game.turn = "X"; // X always goes first
+
+        // Update game settings AFTER calculating new board
+        game.gameSize = gameSize;
+        game.boardDimension = dimension;
+        game.hostStarts = hostStarts;
 
         // Update player symbols based on hostStarts
         const hostIndex = 0;
@@ -300,6 +318,11 @@ io.on("connection", (socket) => {
 
         // Restart the game with new settings
         io.to(gameId).emit("gameRestarted", game);
+      } else {
+        // Just update the settings without resetting the game
+        game.gameSize = gameSize;
+        game.boardDimension = dimension;
+        game.hostStarts = hostStarts;
       }
     }
   });
