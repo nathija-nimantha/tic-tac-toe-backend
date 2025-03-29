@@ -179,9 +179,6 @@ io.on("connection", (socket) => {
       return; // Player not in this game
     }
 
-    // Log the current state to help debug
-    console.log(`Turn: ${game.turn}, Player: ${currentPlayerIndex}, HostStarts: ${game.hostStarts}`);
-
     // Determine which player should be X based on hostStarts
     const playerX = game.hostStarts ? game.players[0] : game.players[1];
     const playerO = game.hostStarts ? game.players[1] : game.players[0];
@@ -265,65 +262,59 @@ io.on("connection", (socket) => {
     console.log(`Change Game Settings: ${gameId}, Size: ${gameSize}, Host Starts: ${hostStarts}, Apply Immediately: ${applyImmediately}`);
     const game = games[gameId];
 
-    if (game && socket.id === game.host) {
-      // Get board dimensions and total cell count
-      const dimension = gameSize === "3x3" ? 3 : gameSize === "6x6" ? 6 : 9;
-      const boardSize = dimension * dimension;
+    if (!game || socket.id !== game.host) {
+      return;
+    }
 
-      // Broadcast game settings change to all players
+    // Get board dimensions and total cell count
+    const dimension = gameSize === "3x3" ? 3 : gameSize === "6x6" ? 6 : 9;
+    const boardSize = dimension * dimension;
+
+    // Only reset the game if we're applying immediately or the game is over
+    const shouldReset = applyImmediately ||
+        game.board.every(cell => cell === null) ||
+        checkWinner(game.board, game.winningCombinations);
+
+    if (shouldReset) {
+      // Reset the game with new settings
+      game.gameSize = gameSize;
+      game.boardDimension = dimension;
+      game.hostStarts = hostStarts;
+      game.board = Array(boardSize).fill(null);
+      game.winningCombinations = generateWinningCombinations(boardSize);
+      game.turn = "X";
+
+      // Only reassign player symbols if we have 2 players
+      if (game.players.length >= 2) {
+        const hostSymbol = hostStarts ? "X" : "O";
+        const guestSymbol = hostStarts ? "O" : "X";
+
+        // Notify host of their symbol
+        io.to(game.players[0]).emit("assignSymbol", {
+          symbol: hostSymbol,
+          isHost: true
+        });
+
+        // Notify guest of their symbol
+        io.to(game.players[1]).emit("assignSymbol", {
+          symbol: guestSymbol,
+          isHost: false
+        });
+      }
+
+      // Notify clients of the reset game
+      io.to(gameId).emit("gameRestarted", game);
+    } else {
+      game.gameSize = gameSize;
+      game.boardDimension = dimension;
+
+      // Notify clients of the changed settings
       io.to(gameId).emit("gameSettingsChanged", {
         gameSize,
-        hostStarts,
-        boardSize: boardSize,
-        dimension: dimension
+        hostStarts: game.hostStarts,
+        boardSize,
+        dimension
       });
-
-      // If applyImmediately is true or game is over, apply changes now
-      if (applyImmediately || game.board.every(cell => cell !== null) || checkWinner(game.board, game.winningCombinations)) {
-        // Reset the board and update winning combinations
-        game.board = Array(boardSize).fill(null);
-        game.winningCombinations = generateWinningCombinations(boardSize);
-        game.turn = "X"; // X always goes first
-
-        // Update game settings AFTER calculating new board
-        game.gameSize = gameSize;
-        game.boardDimension = dimension;
-        game.hostStarts = hostStarts;
-
-        // Update player symbols based on hostStarts
-        const hostIndex = 0;
-        const guestIndex = 1;
-
-        if (game.players.length >= 2) {
-          const hostSymbol = hostStarts ? "X" : "O";
-          const guestSymbol = hostStarts ? "O" : "X";
-
-          console.log(`Reassigning symbols - Host: ${hostSymbol}, Guest: ${guestSymbol}. Host starts: ${hostStarts}`);
-
-          // Notify players about their updated symbols
-          if (game.players[hostIndex]) {
-            io.to(game.players[hostIndex]).emit("assignSymbol", {
-              symbol: hostSymbol,
-              isHost: true
-            });
-          }
-
-          if (game.players[guestIndex]) {
-            io.to(game.players[guestIndex]).emit("assignSymbol", {
-              symbol: guestSymbol,
-              isHost: false
-            });
-          }
-        }
-
-        // Restart the game with new settings
-        io.to(gameId).emit("gameRestarted", game);
-      } else {
-        // Just update the settings without resetting the game
-        game.gameSize = gameSize;
-        game.boardDimension = dimension;
-        game.hostStarts = hostStarts;
-      }
     }
   });
 
