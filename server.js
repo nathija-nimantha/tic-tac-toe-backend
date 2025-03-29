@@ -1,11 +1,14 @@
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
+const cors = require("cors");
 
 const app = express();
+app.use(cors());
+
 const server = http.createServer(app);
 
-// Allow all origins
+// Allow connections from any origin
 const io = new Server(server, {
   cors: {
     origin: "*",
@@ -81,18 +84,22 @@ io.on("connection", (socket) => {
     const { gameId, gameSize, hostStarts } = data;
     console.log(`Create Game: ${gameId} by ${socket.id} with size ${gameSize}`);
 
-    const boardSize = gameSize === "3x3" ? 9 : gameSize === "6x6" ? 36 : 81;
+    // Get board dimensions and total cell count
+    const dimension = gameSize === "3x3" ? 3 : gameSize === "6x6" ? 6 : 9;
+    const boardSize = dimension * dimension;
 
     if (!games[gameId]) {
       games[gameId] = {
         players: [],
         board: Array(boardSize).fill(null),
         gameSize: gameSize,
+        boardDimension: dimension,
         turn: "X",
         restartRequests: [],
         host: socket.id,
         hostStarts: hostStarts,
-        winningCombinations: generateWinningCombinations(boardSize)
+        winningCombinations: generateWinningCombinations(boardSize),
+        restartPending: false
       };
     }
 
@@ -195,6 +202,8 @@ io.on("connection", (socket) => {
         const otherPlayer = game.players.find(playerId => playerId !== socket.id);
         if (otherPlayer) {
           console.log(`Sending restart request to other player: ${otherPlayer}`);
+          // Track that a restart request is pending
+          game.restartPending = true;
           socket.to(otherPlayer).emit("restartRequest");
         }
       }
@@ -204,6 +213,8 @@ io.on("connection", (socket) => {
         // Reset the game
         game.board = Array(game.board.length).fill(null);
         game.turn = "X";
+        // Clear the pending restart flag
+        game.restartPending = false;
 
         // Emit game restart to both players
         io.to(gameId).emit("gameRestarted", game);
@@ -213,44 +224,77 @@ io.on("connection", (socket) => {
     }
   });
 
+  // Handle restart decline
+  socket.on("declineRestart", (gameId) => {
+    console.log(`Restart declined for game: ${gameId} by ${socket.id}`);
+    const game = games[gameId];
+
+    if (game && game.restartPending) {
+      // Clear the pending restart flag
+      game.restartPending = false;
+
+      // Notify the host that the restart was declined
+      if (game.host && game.host !== socket.id) {
+        io.to(game.host).emit("restartDeclined");
+      }
+    }
+  });
+
   // Change game settings
-  socket.on("changeGameSettings", ({ gameId, gameSize, hostStarts }) => {
-    console.log(`Change Game Settings: ${gameId}, Size: ${gameSize}, Host Starts: ${hostStarts}`);
+  socket.on("changeGameSettings", ({ gameId, gameSize, hostStarts, applyImmediately }) => {
+    console.log(`Change Game Settings: ${gameId}, Size: ${gameSize}, Host Starts: ${hostStarts}, Apply Immediately: ${applyImmediately}`);
     const game = games[gameId];
 
     if (game && socket.id === game.host) {
-      const boardSize = gameSize === "3x3" ? 9 : gameSize === "6x6" ? 36 : 81;
+      // Get board dimensions and total cell count
+      const dimension = gameSize === "3x3" ? 3 : gameSize === "6x6" ? 6 : 9;
+      const boardSize = dimension * dimension;
 
+      // Update game settings
       game.gameSize = gameSize;
+      game.boardDimension = dimension;
       game.hostStarts = hostStarts;
-      game.board = Array(boardSize).fill(null);
-      game.winningCombinations = generateWinningCombinations(boardSize);
-      game.turn = "X";
 
-      // Update player symbols based on hostStarts
-      const hostIndex = 0;
-      const guestIndex = 1;
+      // Broadcast game settings change to all players
+      io.to(gameId).emit("gameSettingsChanged", {
+        gameSize,
+        hostStarts,
+        boardSize: boardSize,
+        dimension: dimension
+      });
 
-      const hostSymbol = hostStarts ? "X" : "O";
-      const guestSymbol = hostStarts ? "O" : "X";
+      // If applyImmediately is true or game is over, apply changes now
+      if (applyImmediately || game.board.every(cell => cell !== null) || checkWinner(game.board, game.winningCombinations)) {
+        // Reset the board and update winning combinations
+        game.board = Array(boardSize).fill(null);
+        game.winningCombinations = generateWinningCombinations(boardSize);
+        game.turn = "X";
 
-      // Notify players about their updated symbols
-      if (game.players[hostIndex]) {
-        io.to(game.players[hostIndex]).emit("assignSymbol", {
-          symbol: hostSymbol,
-          isHost: true
-        });
+        // Update player symbols based on hostStarts
+        const hostIndex = 0;
+        const guestIndex = 1;
+
+        const hostSymbol = hostStarts ? "X" : "O";
+        const guestSymbol = hostStarts ? "O" : "X";
+
+        // Notify players about their updated symbols
+        if (game.players[hostIndex]) {
+          io.to(game.players[hostIndex]).emit("assignSymbol", {
+            symbol: hostSymbol,
+            isHost: true
+          });
+        }
+
+        if (game.players[guestIndex]) {
+          io.to(game.players[guestIndex]).emit("assignSymbol", {
+            symbol: guestSymbol,
+            isHost: false
+          });
+        }
+
+        // Restart the game with new settings
+        io.to(gameId).emit("gameRestarted", game);
       }
-
-      if (game.players[guestIndex]) {
-        io.to(game.players[guestIndex]).emit("assignSymbol", {
-          symbol: guestSymbol,
-          isHost: false
-        });
-      }
-
-      // Restart the game with new settings
-      io.to(gameId).emit("gameRestarted", game);
     }
   });
 
@@ -288,4 +332,10 @@ io.on("connection", (socket) => {
   });
 });
 
-server.listen(3002, () => console.log("Server running on port 3002"));
+// Route to check if server is running
+app.get("/", (req, res) => {
+  res.send("Tic-Tac-Toe Server is running!");
+});
+
+const PORT = process.env.PORT || 3001;
+server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
