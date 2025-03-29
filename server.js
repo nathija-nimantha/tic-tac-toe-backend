@@ -82,7 +82,7 @@ io.on("connection", (socket) => {
   // Create a new game with options
   socket.on("createGame", (data) => {
     const { gameId, gameSize, hostStarts } = data;
-    console.log(`Create Game: ${gameId} by ${socket.id} with size ${gameSize}`);
+    console.log(`Create Game: ${gameId} by ${socket.id} with size ${gameSize}, Host starts: ${hostStarts}`);
 
     // Get board dimensions and total cell count
     const dimension = gameSize === "3x3" ? 3 : gameSize === "6x6" ? 6 : 9;
@@ -94,10 +94,10 @@ io.on("connection", (socket) => {
         board: Array(boardSize).fill(null),
         gameSize: gameSize,
         boardDimension: dimension,
-        turn: "X",
+        turn: "X", // X always goes first
         restartRequests: [],
         host: socket.id,
-        hostStarts: hostStarts,
+        hostStarts: hostStarts, // But this determines who plays as X
         winningCombinations: generateWinningCombinations(boardSize),
         restartPending: false
       };
@@ -128,7 +128,10 @@ io.on("connection", (socket) => {
           games[gameId].players.push(socket.id);
 
           // Assign symbol based on host preference
+          // If hostStarts is true, the host plays as X and guest plays as O
+          // If hostStarts is false, the host plays as O and guest plays as X
           const playerSymbol = games[gameId].hostStarts ? "O" : "X";
+          console.log(`Assigning symbol ${playerSymbol} to joining player. Host starts: ${games[gameId].hostStarts}`);
 
           socket.join(gameId);
           socket.emit("assignSymbol", {
@@ -168,14 +171,13 @@ io.on("connection", (socket) => {
 
     if (game && game.board[index] === null) {
       const currentPlayerIndex = game.players.indexOf(socket.id);
-      const expectedSymbol = game.turn;
 
-      // Only allow move if it's the player's turn
-      if ((expectedSymbol === "X" &&
-              (game.hostStarts ? currentPlayerIndex === 0 : currentPlayerIndex === 1)) ||
-          (expectedSymbol === "O" &&
-              (game.hostStarts ? currentPlayerIndex === 1 : currentPlayerIndex === 0))) {
+      // Determine which player should be moving based on the current turn and host settings
+      const isPlayerXTurn = game.turn === "X";
+      const isPlayerXMoving = (game.hostStarts && currentPlayerIndex === 0) || (!game.hostStarts && currentPlayerIndex === 1);
 
+      // Check if the correct player is making the move
+      if ((isPlayerXTurn && isPlayerXMoving) || (!isPlayerXTurn && !isPlayerXMoving)) {
         game.board[index] = game.turn;
         const result = checkWinner(game.board, game.winningCombinations);
 
@@ -274,22 +276,26 @@ io.on("connection", (socket) => {
         const hostIndex = 0;
         const guestIndex = 1;
 
-        const hostSymbol = hostStarts ? "X" : "O";
-        const guestSymbol = hostStarts ? "O" : "X";
+        if (game.players.length >= 2) {
+          const hostSymbol = hostStarts ? "X" : "O";
+          const guestSymbol = hostStarts ? "O" : "X";
 
-        // Notify players about their updated symbols
-        if (game.players[hostIndex]) {
-          io.to(game.players[hostIndex]).emit("assignSymbol", {
-            symbol: hostSymbol,
-            isHost: true
-          });
-        }
+          console.log(`Reassigning symbols - Host: ${hostSymbol}, Guest: ${guestSymbol}. Host starts: ${hostStarts}`);
 
-        if (game.players[guestIndex]) {
-          io.to(game.players[guestIndex]).emit("assignSymbol", {
-            symbol: guestSymbol,
-            isHost: false
-          });
+          // Notify players about their updated symbols
+          if (game.players[hostIndex]) {
+            io.to(game.players[hostIndex]).emit("assignSymbol", {
+              symbol: hostSymbol,
+              isHost: true
+            });
+          }
+
+          if (game.players[guestIndex]) {
+            io.to(game.players[guestIndex]).emit("assignSymbol", {
+              symbol: guestSymbol,
+              isHost: false
+            });
+          }
         }
 
         // Restart the game with new settings
